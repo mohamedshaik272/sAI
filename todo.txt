@@ -1,0 +1,33 @@
+sAI - Implementation Plan
+
+PHASE 1: Core Loop
+------------------
+[x] backend/app.py - FastAPI + WebSocket
+[x] backend/config.py - settings
+[x] backend/whisper.py - transcription
+[x] backend/elevenlabs_tts.py - TTS
+[x] backend/tracking.py - body tracking
+[x] backend/gemini.py - empty for partner
+[x] frontend/index.html - minimal UI
+[x] frontend/src/main.js - mic, websocket, audio
+[x] frontend/src/avatar.js - three.js, vrm, lip sync
+[ ] TEST: backend starts
+[ ] TEST: frontend connects
+[ ] TEST: full loop works
+
+PHASE 2: LLM
+------------
+[ ] partner fills in gemini.py
+[ ] update app.py to use gemini
+
+PHASE 3: Hardware
+-----------------
+[ ] arduino/servo_control.ino
+[ ] integrate tracking in app.py
+
+SETUP
+-----
+[ ] pip install -r requirements.txt
+[ ] create .env from .env.example
+[ ] add ElevenLabs API key
+[ ] download VRM to frontend/public/models/avatar.vrm

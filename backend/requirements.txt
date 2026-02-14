@@ -1,15 +1,11 @@
-fastapi==0.129.0
-uvicorn==0.40.0
-python-dotenv==1.2.1
-websockets==16.0
-pydantic==2.12.5
-
-# AI stuff
-google-generativeai
+fastapi
+uvicorn
+python-dotenv
+websockets
 elevenlabs
 faster-whisper
-
-# Body tracking
+torch
+numpy
 opencv-python
 mediapipe
 pyserial
