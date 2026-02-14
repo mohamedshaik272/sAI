@@ -9,4 +9,4 @@ numpy
 opencv-python
 mediapipe
 pyserial
-google-generativeai
+google-genai
