@@ -1,7 +1,20 @@
+from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI
 
-app = FastAPI()
+from backend.api.tts import router as tts_router
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.client = httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+    )
+
+    yield
+
+    await app.state.client.aclose()
+
+app = FastAPI(lifespan=lifespan)
+
+app.include_router(tts_router, prefix="/api")
