@@ -17,6 +17,12 @@ def synthesize(text: str) -> bytes:
         voice_id=config.ELEVENLABS_VOICE_ID,
         text=text,
         model_id="eleven_flash_v2_5",
-        output_format="mp3_44100_128"
+        output_format="mp3_44100_128",
+        voice_settings={
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.4,
+            "use_speaker_boost": True
+        }
     )
     return b"".join(audio)

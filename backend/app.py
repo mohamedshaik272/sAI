@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 import whisper
-import elevenlabs_tts
+import elevenlabs
 
 app = FastAPI()
 
@@ -46,7 +46,7 @@ async def conversation_ws(websocket: WebSocket):
                     # TODO: send user_text to gemini, get response
                     response_text = user_text  # echo for now
 
-                    audio = elevenlabs_tts.synthesize(response_text)
+                    audio = elevenlabs.synthesize(response_text)
                     audio_b64 = base64.b64encode(audio).decode()
                     await websocket.send_json({"type": "audio", "audio": audio_b64})
                 finally:
