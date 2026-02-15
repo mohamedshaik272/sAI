@@ -4,7 +4,6 @@ import base64
 import tempfile
 import asyncio
 import wave
-import threading
 from contextlib import asynccontextmanager
 
 import sounddevice as sd
@@ -15,6 +14,7 @@ from google import genai
 
 import stt
 import tts
+import servo
 import config
 from gemini import GeminiRequest, GEMINI_CONFIG
 
@@ -22,7 +22,17 @@ from gemini import GeminiRequest, GEMINI_CONFIG
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
+
+    if config.SERIAL_PORT:
+        try:
+            servo.start_tracking()
+            print(f"[SERVO] Tracking started on {config.SERIAL_PORT}")
+        except Exception as e:
+            print(f"[SERVO] Failed to start tracking: {e}")
+
     yield
+
+    servo.stop_tracking()
     app.state.gemini_client = None
 
 app = FastAPI(lifespan=lifespan)
@@ -42,6 +52,21 @@ CHANNELS = 1
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/tracking/start")
+def start_tracking(camera_index: int = None):
+    try:
+        servo.start_tracking(camera_index=camera_index)
+        return {"status": "tracking started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tracking/stop")
+def stop_tracking():
+    servo.stop_tracking()
+    return {"status": "tracking stopped"}
 
 
 @app.post("/api/test")

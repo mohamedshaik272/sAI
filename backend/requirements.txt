@@ -10,3 +10,4 @@ opencv-python
 mediapipe
 pyserial
 google-genai
+sounddevice
