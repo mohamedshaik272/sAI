@@ -3,7 +3,7 @@
 sAI is a holographic AI companion designed for mental health support as well as other healthcare-related needs.  
 It combines real-time voice interaction, 3D avatar animation, and physical motor tracking to create an AI that feels present and responsive.
 
-This project bridges AI software with hardware embodiment — allowing an AI assistant to listen, respond naturally, animate visually, and physically track the user.
+This project bridges AI software with hardware — allowing an AI assistant to listen, respond naturally, animate visually, and physically track the user.
 
 ## What It Does
 
@@ -51,6 +51,11 @@ Three.js allows full control over 3D rendering and animation, making it ideal fo
 - **Webcam** – Detects and tracks user position.
 
 This hardware integration gives the AI a physical presence instead of existing purely on-screen.
+
+## Motivation
+Mental health and medical support aren’t always easy to access. Our project aims to create a supportive, 
+interactive presence that offers comfort, guidance, and basic healthcare assistance in everyday moments. 
+By moving beyond screens, we hope to make care feel more natural, approachable, and human.
 
 ## Setup
 
