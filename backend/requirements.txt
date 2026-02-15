@@ -6,8 +6,5 @@ elevenlabs
 faster-whisper
 torch
 numpy
-opencv-python
-mediapipe
-pyserial
 google-genai
 sounddevice
