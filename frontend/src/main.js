@@ -1,4 +1,12 @@
-import { initAvatar, updateLipSync, stopLipSync } from './avatar.js';
+import { initAvatar, updateLipSync, stopLipSync, setEmotion, switchModel } from './avatar.js';
+import { initWakeWord, notifySpeakingDone, setSpeaking } from './wakeWord.js';
+
+// Character definitions: each maps a VRM model to an ElevenLabs voice
+const CHARACTERS = [
+    { name: 'SpongeBob', vrm: '/models/spongebob.vrm',  voiceId: 'fBD19tfE58bkETeiwUoC' },
+    { name: 'sAI',       vrm: '/models/avatar.vrm',     voiceId: 's3TPKV1kjDlVtZbl4Ksh' },
+];
+let currentCharIndex = 0;
 
 const getServerUrl = () => {
     const host = window.location.hostname;
@@ -7,30 +15,29 @@ const getServerUrl = () => {
 };
 
 let ws = null;
-let isRecording = false;
-let audioContext = null;
 let reconnectTimer = null;
 let pingInterval = null;
 
-function ensureAudioContext() {
-    if (!audioContext || audioContext.state === 'closed') {
-        audioContext = new AudioContext();
-    }
-    if (audioContext.state === 'suspended') {
-        audioContext.resume();
-    }
-    return audioContext;
-}
+// Audio element for TTS playback — unlocked from the start overlay click
+const audioEl = new Audio();
+audioEl.volume = 1.0;
 
-const micBtn = document.getElementById('mic-btn');
 const statusEl = document.getElementById('status');
+const wakeIndicator = document.getElementById('wake-indicator');
 
 function setStatus(text) {
     if (statusEl) statusEl.textContent = text;
 }
 
+function updateIndicator(state) {
+    if (!wakeIndicator) return;
+    wakeIndicator.className = 'wake-indicator';
+    if (state === 'idle') wakeIndicator.classList.add('listening');
+    else if (state === 'activated') wakeIndicator.classList.add('recording');
+    else if (state === 'processing') wakeIndicator.classList.add('processing');
+}
+
 function connect() {
-    // Prevent stacking multiple reconnect attempts
     if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -44,8 +51,7 @@ function connect() {
     ws = new WebSocket(url);
 
     ws.onopen = () => {
-        setStatus('ready');
-        // Keepalive ping every 15s to prevent idle timeout
+        setStatus('listening for "hey sai"');
         if (pingInterval) clearInterval(pingInterval);
         pingInterval = setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -57,8 +63,6 @@ function connect() {
     ws.onclose = () => {
         setStatus('offline');
         if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
-        isRecording = false;
-        micBtn.classList.remove('recording');
         reconnectTimer = setTimeout(connect, 2000);
     };
 
@@ -69,80 +73,90 @@ function connect() {
         try { data = JSON.parse(event.data); } catch { return; }
 
         if (data.type === 'pong') {
-            // keepalive response, ignore
+            // keepalive response
         } else if (data.type === 'transcript') {
             setStatus(`heard: "${data.text}"`);
         } else if (data.type === 'audio') {
             setStatus('speaking');
-            playAudio(data.audio);
+            setSpeaking();
+            playAudio(data.audio, data.emotion || 'neutral', data.amplitudes, data.amplitudeBucketMs);
         } else if (data.type === 'error') {
             setStatus('error: ' + (data.message || ''));
-        } else if (data.type === 'listening') {
-            setStatus('listening...');
+            notifySpeakingDone();
         } else if (data.type === 'processing') {
             setStatus('processing...');
         }
     };
 }
 
-async function playAudio(base64Audio) {
-    try {
-        const ctx = ensureAudioContext();
-        const audioBytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
-        const audioBuffer = await ctx.decodeAudioData(audioBytes.buffer.slice(0));
+function playAudio(base64Audio, emotion, amplitudes, bucketMs) {
+    const audioBytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
+    console.log(`[Audio] Received ${audioBytes.length} bytes, attempting playback`);
 
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
+    const blob = new Blob([audioBytes], { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
 
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
+    // Reuse the pre-unlocked audio element
+    audioEl.src = url;
+    let playing = true;
+    const bucketDuration = (bucketMs || 50) / 1000;
 
-        source.connect(analyser);
-        analyser.connect(ctx.destination);
+    setEmotion(emotion);
 
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        let playing = true;
+    audioEl.onended = () => {
+        console.log('[Audio] Playback ended');
+        playing = false;
+        stopLipSync();
+        setEmotion('neutral');
+        setStatus('listening for "hey sai"');
+        URL.revokeObjectURL(url);
+        notifySpeakingDone();
+    };
 
-        const update = () => {
-            if (!playing) return;
-            analyser.getByteFrequencyData(dataArray);
-            const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
-            updateLipSync(avg / 255);
-            requestAnimationFrame(update);
-        };
+    audioEl.onerror = (e) => {
+        console.error('[Audio] Playback error:', e);
+        playing = false;
+        setStatus('listening for "hey sai"');
+        URL.revokeObjectURL(url);
+        notifySpeakingDone();
+    };
 
-        source.onended = () => {
-            playing = false;
-            stopLipSync();
-            setStatus('ready');
-        };
+    const update = () => {
+        if (!playing) return;
+        if (amplitudes && amplitudes.length > 0 && !audioEl.paused) {
+            const bucketIndex = Math.floor(audioEl.currentTime / bucketDuration);
+            const clampedIndex = Math.min(bucketIndex, amplitudes.length - 1);
+            const nextIndex = Math.min(clampedIndex + 1, amplitudes.length - 1);
+            const fraction = (audioEl.currentTime / bucketDuration) - bucketIndex;
+            const interpolated = amplitudes[clampedIndex] * (1 - fraction)
+                               + amplitudes[nextIndex] * fraction;
+            updateLipSync(interpolated);
+        } else {
+            updateLipSync(0.3 + Math.random() * 0.4);
+        }
+        requestAnimationFrame(update);
+    };
 
-        source.start(0);
-        update();
-    } catch (err) {
-        console.error('Audio playback failed:', err);
-        setStatus('ready');
-    }
-}
-
-function startListening() {
-    // Unlock audio context on user gesture (required for mobile playback)
-    ensureAudioContext();
-
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'start_listening' }));
-        isRecording = true;
-        micBtn.classList.add('recording');
-    }
-}
-
-function stopListening() {
-    if (isRecording && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'stop_listening' }));
-        isRecording = false;
-        micBtn.classList.remove('recording');
-        setStatus('processing...');
-    }
+    audioEl.play()
+        .then(() => {
+            console.log('[Audio] Playback started');
+            update();
+        })
+        .catch((err) => {
+            console.error('[Audio] play() blocked:', err);
+            setStatus('click page to enable audio');
+            // Wait for a click then retry
+            document.addEventListener('click', () => {
+                audioEl.play().then(() => {
+                    console.log('[Audio] Playback started after click');
+                    setStatus('speaking');
+                    update();
+                }).catch(() => {
+                    setStatus('listening for "hey sai"');
+                    notifySpeakingDone();
+                });
+            }, { once: true });
+        });
 }
 
 function enterFullscreen() {
@@ -152,13 +166,60 @@ function enterFullscreen() {
     screen.orientation?.lock?.('portrait').catch(() => {});
 }
 
-micBtn.addEventListener('mousedown', startListening);
-micBtn.addEventListener('mouseup', stopListening);
-micBtn.addEventListener('mouseleave', stopListening);
-micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startListening(); });
-micBtn.addEventListener('touchend', stopListening);
-
 document.getElementById('fullscreen-btn')?.addEventListener('click', enterFullscreen);
 
+// Character toggle button
+document.getElementById('character-btn')?.addEventListener('click', () => {
+    currentCharIndex = (currentCharIndex + 1) % CHARACTERS.length;
+    const char = CHARACTERS[currentCharIndex];
+    switchModel(char.vrm);
+    setStatus(`switched to ${char.name}`);
+    const btn = document.getElementById('character-btn');
+    if (btn) btn.title = char.name;
+    console.log(`[Character] Switched to ${char.name} (voice: ${char.voiceId})`);
+});
+
+// Load avatar immediately (visual only, no audio)
 initAvatar();
-connect();
+
+// Defer audio + wake word until user taps the start overlay
+const overlay = document.getElementById('start-overlay');
+function startApp() {
+    // Unlock audio element from this click context
+    audioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+    audioEl.play().then(() => audioEl.pause()).catch(() => {});
+    console.log('[Audio] Element unlocked via start overlay');
+
+    overlay?.classList.add('hidden');
+
+    connect();
+    initWakeWord({
+        onStateChange: (newState) => {
+            updateIndicator(newState);
+            const labels = {
+                idle: 'listening for "hey sai"',
+                activated: 'listening...',
+                processing: 'processing...',
+                speaking: 'speaking',
+            };
+            setStatus(labels[newState] || newState);
+        },
+        onCommandAudio: (base64, format) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const voiceId = CHARACTERS[currentCharIndex].voiceId;
+                ws.send(JSON.stringify({ type: 'audio_data', audio: base64, format, voiceId }));
+            }
+        },
+        onError: (message) => {
+            console.error('[WakeWord]', message);
+            setStatus('error: ' + message);
+        },
+    });
+}
+
+if (overlay) {
+    overlay.addEventListener('click', startApp, { once: true });
+} else {
+    // Fallback if overlay not found
+    startApp();
+}

@@ -7,4 +7,5 @@ faster-whisper
 torch
 numpy
 google-genai
-sounddevice
+pydub
+ollama

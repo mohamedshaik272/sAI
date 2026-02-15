@@ -11,13 +11,13 @@ def _get_client():
     return _client
 
 
-def synthesize(text: str) -> bytes:
+def synthesize(text: str, voice_id: str = None) -> bytes:
     client = _get_client()
     audio = client.text_to_speech.convert(
-        voice_id=config.ELEVENLABS_VOICE_ID,
+        voice_id=voice_id or config.ELEVENLABS_VOICE_ID,
         text=text,
         model_id="eleven_flash_v2_5",
-        output_format="mp3_44100_128",
+        output_format="mp3_22050_32",
         voice_settings={
             "stability": 0.5,
             "similarity_boost": 0.75,

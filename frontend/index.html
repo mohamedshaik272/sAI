@@ -52,18 +52,31 @@
     .btn:active { transform: scale(0.95); }
     .btn:hover { border-color: rgba(255,255,255,0.5); }
     .btn svg { width: 20px; height: 20px; stroke: rgba(255,255,255,0.7); fill: none; stroke-width: 2; }
-    #mic-btn {
-      width: 64px;
-      height: 64px;
-      border-color: rgba(255,255,255,0.4);
-    }
-    #mic-btn svg { width: 24px; height: 24px; }
-    #mic-btn.recording {
-      border-color: #fff;
-      background: rgba(255,255,255,0.1);
-    }
-    #mic-btn.recording svg { stroke: #fff; }
     .btn.active { border-color: rgba(255,255,255,0.6); }
+    .wake-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      transition: all 0.3s ease;
+    }
+    .wake-indicator.listening {
+      background: rgba(100,200,100,0.6);
+      box-shadow: 0 0 10px rgba(100,200,100,0.4);
+    }
+    .wake-indicator.recording {
+      background: rgba(255,80,80,0.8);
+      box-shadow: 0 0 15px rgba(255,80,80,0.5);
+      animation: pulse 1s ease-in-out infinite;
+    }
+    .wake-indicator.processing {
+      background: rgba(100,150,255,0.6);
+      animation: pulse 0.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.5); }
+    }
     #status {
       position: fixed;
       top: max(20px, env(safe-area-inset-top));
@@ -77,17 +90,39 @@
     }
     body.hologram #controls,
     body.hologram #status { display: none; }
+    #start-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      cursor: pointer;
+    }
+    #start-overlay span {
+      color: rgba(255,255,255,0.7);
+      font-size: 18px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 16px 32px;
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 8px;
+    }
+    #start-overlay.hidden { display: none; }
   </style>
 </head>
 <body>
+  <div id="start-overlay"><span>Tap to start</span></div>
   <canvas id="canvas"></canvas>
   <div id="status">initializing</div>
   <div id="controls">
     <button class="btn" id="hologram-btn" title="Hologram">
       <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
     </button>
-    <button class="btn" id="mic-btn">
-      <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+    <div id="wake-indicator" class="wake-indicator"></div>
+    <button class="btn" id="character-btn" title="sAI">
+      <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
     </button>
     <button class="btn" id="fullscreen-btn" title="Fullscreen">
       <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>

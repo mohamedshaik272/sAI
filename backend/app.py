@@ -1,12 +1,12 @@
 import os
+import io
+import re
 import json
 import base64
 import tempfile
 import asyncio
-import wave
 from contextlib import asynccontextmanager
 
-import sounddevice as sd
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,13 +14,17 @@ from google import genai
 
 import stt
 import tts
+import llm
 import config
 from gemini import GeminiRequest, GEMINI_CONFIG
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
+    if config.GEMINI_API_KEY and config.LLM_PROVIDER == "gemini":
+        app.state.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
+    else:
+        app.state.gemini_client = None
     yield
     app.state.gemini_client = None
 
@@ -36,6 +40,28 @@ app.add_middleware(
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
+
+EMOTION_PATTERN = re.compile(r'^\[?(happy|sad|angry|surprised|concerned|neutral)\]?\s*', re.IGNORECASE)
+
+
+def extract_amplitude_envelope(mp3_bytes: bytes, bucket_ms: int = 50) -> list[float]:
+    """Extract normalized amplitude envelope from MP3 bytes."""
+    from pydub import AudioSegment
+    audio_seg = AudioSegment.from_mp3(io.BytesIO(mp3_bytes))
+    samples = np.array(audio_seg.get_array_of_samples(), dtype=np.float32)
+    if audio_seg.channels == 2:
+        samples = samples[::2]
+    bucket_size = int(audio_seg.frame_rate * bucket_ms / 1000)
+    amplitudes = []
+    for i in range(0, len(samples), bucket_size):
+        chunk = samples[i:i + bucket_size]
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        amplitudes.append(rms)
+    if amplitudes:
+        max_amp = max(amplitudes)
+        if max_amp > 0:
+            amplitudes = [a / max_amp for a in amplitudes]
+    return amplitudes
 
 
 @app.get("/health")
@@ -59,18 +85,9 @@ async def generate_text(req: GeminiRequest):
 @app.websocket("/ws/conversation")
 async def conversation_ws(websocket: WebSocket):
     await websocket.accept()
-    print("[WS] Connection accepted")
+    print("[WS] Connection accepted", flush=True)
 
-    recording = False
-    audio_frames = []
-    stream = None
     loop = asyncio.get_event_loop()
-
-    def audio_callback(indata, frames, time_info, status):
-        if status:
-            print(f"[MIC] sounddevice status: {status}")
-        if recording:
-            audio_frames.append(indata.copy())
 
     while True:
         try:
@@ -87,59 +104,39 @@ async def conversation_ws(websocket: WebSocket):
 
             print(f"[WS] Received: {msg_type}")
 
-            if msg_type == "start_listening":
-                audio_frames.clear()
-                recording = True
-                print(f"[MIC] Opening stream - samplerate={SAMPLE_RATE}, channels={CHANNELS}")
-                try:
-                    stream = sd.InputStream(
-                        samplerate=SAMPLE_RATE,
-                        channels=CHANNELS,
-                        dtype="int16",
-                        callback=audio_callback,
-                    )
-                    stream.start()
-                    print("[MIC] Recording started")
-                except Exception as e:
-                    print(f"[MIC] ERROR opening stream: {e}")
-                    await websocket.send_json({"type": "error", "message": f"mic error: {e}"})
-                    continue
-                await websocket.send_json({"type": "listening"})
-
-            elif msg_type == "stop_listening":
-                recording = False
-                if stream:
-                    stream.stop()
-                    stream.close()
-                    stream = None
-                print(f"[MIC] Recording stopped - captured {len(audio_frames)} frames")
-
-                if not audio_frames:
-                    print("[MIC] WARNING: no audio frames captured!")
-                    await websocket.send_json({"type": "error", "message": "no audio captured"})
+            if msg_type == "audio_data":
+                # Audio captured by the browser and sent as base64
+                audio_b64 = data.get("audio")
+                if not audio_b64:
+                    await websocket.send_json({"type": "error", "message": "no audio data"})
                     continue
 
                 await websocket.send_json({"type": "processing"})
 
-                # Save captured audio to temp WAV file
-                audio_data = np.concatenate(audio_frames)
-                duration = len(audio_data) / SAMPLE_RATE
-                print(f"[AUDIO] Captured {len(audio_data)} samples ({duration:.2f}s)")
+                audio_bytes = base64.b64decode(audio_b64)
+                audio_format = data.get("format", "webm")
+                voice_id = data.get("voiceId")
+                print(f"[AUDIO] Received {len(audio_bytes)} bytes ({audio_format}) from browser, voice={voice_id}")
+
+                # Convert browser audio to WAV using pydub (requires ffmpeg)
+                from pydub import AudioSegment
+                audio_seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=audio_format)
+                audio_seg = audio_seg.set_channels(CHANNELS).set_frame_rate(SAMPLE_RATE).set_sample_width(2)
 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                    with wave.open(tmp.name, "wb") as wf:
-                        wf.setnchannels(CHANNELS)
-                        wf.setsampwidth(2)  # 16-bit
-                        wf.setframerate(SAMPLE_RATE)
-                        wf.writeframes(audio_data.tobytes())
+                    audio_seg.export(tmp.name, format="wav")
                     tmp_path = tmp.name
-                print(f"[AUDIO] Saved WAV to {tmp_path}")
+
+                duration = len(audio_seg) / 1000.0
+                print(f"[AUDIO] Converted to WAV: {duration:.2f}s")
 
                 try:
+                    import time as _time
+
                     # Transcribe
-                    print("[STT] Starting transcription...")
+                    t0 = _time.time()
                     user_text = await loop.run_in_executor(None, stt.transcribe, tmp_path)
-                    print(f"[STT] Result: '{user_text}'")
+                    print(f"[STT] ({_time.time()-t0:.2f}s) Result: '{user_text}'")
                     await websocket.send_json({"type": "transcript", "text": user_text})
 
                     if not user_text.strip():
@@ -147,25 +144,43 @@ async def conversation_ws(websocket: WebSocket):
                         await websocket.send_json({"type": "error", "message": "could not understand audio"})
                         continue
 
-                    # Get response from Gemini
-                    print("[LLM] Sending to Gemini...")
-                    gemini_response = await loop.run_in_executor(
+                    # Get response from LLM
+                    t0 = _time.time()
+                    response_text = await loop.run_in_executor(
                         None,
-                        lambda: websocket.app.state.gemini_client.models.generate_content(
-                            model="gemini-3-flash-preview",
-                            contents=user_text,
-                            config=GEMINI_CONFIG
-                        )
+                        lambda: llm.generate(user_text, websocket.app.state.gemini_client)
                     )
-                    response_text = gemini_response.text
-                    print(f"[LLM] Response: '{response_text}'")
+                    print(f"[LLM] ({_time.time()-t0:.2f}s) Response: '{response_text}'")
+
+                    # Parse emotion tag
+                    emotion = 'neutral'
+                    emotion_match = EMOTION_PATTERN.match(response_text)
+                    if emotion_match:
+                        emotion = emotion_match.group(1)
+                        response_text = response_text[emotion_match.end():]
 
                     # Synthesize speech
-                    print("[TTS] Starting synthesis...")
-                    audio = await loop.run_in_executor(None, tts.synthesize, response_text)
-                    print(f"[TTS] Got {len(audio)} bytes of audio")
+                    t0 = _time.time()
+                    audio = await loop.run_in_executor(
+                        None, lambda: tts.synthesize(response_text, voice_id=voice_id)
+                    )
+                    print(f"[TTS] ({_time.time()-t0:.2f}s) Got {len(audio)} bytes")
+
+                    # Extract amplitude envelope for lip sync
+                    t0 = _time.time()
+                    amplitudes = await loop.run_in_executor(
+                        None, extract_amplitude_envelope, audio
+                    )
+                    print(f"[LIPSYNC] ({_time.time()-t0:.2f}s) {len(amplitudes)} buckets")
+
                     audio_b64 = base64.b64encode(audio).decode()
-                    await websocket.send_json({"type": "audio", "audio": audio_b64})
+                    await websocket.send_json({
+                        "type": "audio",
+                        "audio": audio_b64,
+                        "emotion": emotion,
+                        "amplitudes": amplitudes,
+                        "amplitudeBucketMs": 50,
+                    })
                     print("[WS] Sent audio response to client")
                 finally:
                     os.unlink(tmp_path)
@@ -182,8 +197,4 @@ async def conversation_ws(websocket: WebSocket):
             except Exception:
                 break
 
-    # Cleanup
-    if stream:
-        stream.stop()
-        stream.close()
     print("[WS] Connection closed")
