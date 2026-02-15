@@ -222,3 +222,12 @@ node_modules/
 # Whisper models (large files)
 *.bin
 *.pt
+
+# Claude Code
+.claude/
+
+# Scratch notes
+temp.txt
+
+# VRM models (large binary files)
+*.vrm
