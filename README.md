@@ -80,19 +80,3 @@ npm run dev
 Upload `arduino/servo_control/servo_control.ino` to your board.
 
 ---
-
-## TODO
-
-- [ ] get api keys (gemini + elevenlabs)
-- [ ] find a good vrm model to use
-- [ ] wire up the mic button to actually record audio
-- [ ] send audio to backend -> transcribe with whisper
-- [ ] hook up gemini for responses
-- [ ] generate voice with elevenlabs and send back
-- [ ] lip sync the avatar when audio plays
-- [ ] webcam body tracking loop
-- [ ] arduino serial connection + test servo
-- [ ] map person x-position to servo angle
-- [ ] build the hologram box thing
-- [ ] test everything together
-- [ ] make it not look terrible
